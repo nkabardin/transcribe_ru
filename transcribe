@@ -1,0 +1,184 @@
+#!/bin/bash
+set -e
+
+# Self-contained transcribe CLI wrapper
+# Handles venv creation, dependencies, and PATH setup
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VENV_DIR="$SCRIPT_DIR/.venv"
+PYTHON_SCRIPT="$SCRIPT_DIR/src/transcribe.py"
+REQUIREMENTS="$SCRIPT_DIR/requirements.txt"
+SCRIPT_NAME="$(basename "$0")"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+info() { echo -e "${BLUE}[INFO]${NC} $1"; }
+success() { echo -e "${GREEN}[OK]${NC} $1"; }
+warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+error() { echo -e "${RED}[ERROR]${NC} $1"; }
+
+# Check if script is in PATH
+check_path() {
+    if ! command -v "$SCRIPT_NAME" &> /dev/null; then
+        warn "transcribe не найден в PATH"
+        echo ""
+        echo "Добавь в ~/.zshrc или ~/.bashrc:"
+        echo ""
+        echo -e "  ${GREEN}export PATH=\"$SCRIPT_DIR:\$PATH\"${NC}"
+        echo ""
+        echo "Или создай симлинк:"
+        echo ""
+        echo -e "  ${GREEN}ln -s \"$SCRIPT_DIR/transcribe\" /usr/local/bin/transcribe${NC}"
+        echo ""
+        read -p "Добавить в PATH автоматически? [y/N] " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            add_to_path
+        fi
+    fi
+}
+
+add_to_path() {
+    local shell_rc=""
+    if [[ -f "$HOME/.zshrc" ]]; then
+        shell_rc="$HOME/.zshrc"
+    elif [[ -f "$HOME/.bashrc" ]]; then
+        shell_rc="$HOME/.bashrc"
+    elif [[ -f "$HOME/.bash_profile" ]]; then
+        shell_rc="$HOME/.bash_profile"
+    else
+        error "Не найден конфиг шелла (.zshrc/.bashrc)"
+        return 1
+    fi
+
+    # Check if already added
+    if grep -q "$SCRIPT_DIR" "$shell_rc" 2>/dev/null; then
+        info "Уже добавлено в $shell_rc"
+        return 0
+    fi
+
+    echo "" >> "$shell_rc"
+    echo "# transcribe CLI" >> "$shell_rc"
+    echo "export PATH=\"$SCRIPT_DIR:\$PATH\"" >> "$shell_rc"
+    success "Добавлено в $shell_rc"
+    info "Выполни: source $shell_rc"
+}
+
+# Ensure Python 3.10+ is available
+check_python() {
+    local python_cmd=""
+
+    for cmd in python3.12 python3.11 python3.10 python3; do
+        if command -v "$cmd" &> /dev/null; then
+            local version=$("$cmd" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+            local major=$(echo "$version" | cut -d. -f1)
+            local minor=$(echo "$version" | cut -d. -f2)
+            if [[ "$major" -ge 3 && "$minor" -ge 10 ]]; then
+                python_cmd="$cmd"
+                break
+            fi
+        fi
+    done
+
+    if [[ -z "$python_cmd" ]]; then
+        error "Требуется Python 3.10+"
+        echo "Установи: brew install python@3.11"
+        exit 1
+    fi
+
+    echo "$python_cmd"
+}
+
+# Setup virtual environment
+setup_venv() {
+    local python_cmd="$1"
+
+    if [[ ! -d "$VENV_DIR" ]]; then
+        info "Создаю виртуальное окружение..."
+        "$python_cmd" -m venv "$VENV_DIR"
+        success "venv создан: $VENV_DIR"
+    fi
+
+    # Check if dependencies need to be installed
+    local pip="$VENV_DIR/bin/pip"
+    local marker="$VENV_DIR/.deps_installed"
+    local req_hash=$(md5 -q "$REQUIREMENTS" 2>/dev/null || md5sum "$REQUIREMENTS" | cut -d' ' -f1)
+
+    if [[ ! -f "$marker" ]] || [[ "$(cat "$marker")" != "$req_hash" ]]; then
+        info "Устанавливаю зависимости..."
+        "$pip" install --upgrade pip -q
+        "$pip" install -r "$REQUIREMENTS" -q
+        echo "$req_hash" > "$marker"
+        success "Зависимости установлены"
+    fi
+}
+
+# Check system dependencies
+check_system_deps() {
+    local missing=()
+
+    for cmd in ffmpeg sox; do
+        if ! command -v "$cmd" &> /dev/null; then
+            missing+=("$cmd")
+        fi
+    done
+
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        error "Не установлены: ${missing[*]}"
+        echo "Установи: brew install ${missing[*]}"
+        exit 1
+    fi
+}
+
+# Main
+main() {
+    # Special commands (before bootstrap)
+    case "${1:-}" in
+        --setup)
+            info "Настройка transcribe..."
+            local python_cmd=$(check_python)
+            check_system_deps
+            setup_venv "$python_cmd"
+            check_path
+            success "Готово к работе!"
+            exit 0
+            ;;
+        --path)
+            check_path
+            exit 0
+            ;;
+        --update)
+            info "Обновляю зависимости..."
+            rm -f "$VENV_DIR/.deps_installed"
+            local python_cmd=$(check_python)
+            setup_venv "$python_cmd"
+            success "Обновлено"
+            exit 0
+            ;;
+    esac
+
+    # Bootstrap if needed
+    if [[ ! -f "$VENV_DIR/bin/python" ]]; then
+        info "Первый запуск, настраиваю окружение..."
+        local python_cmd=$(check_python)
+        check_system_deps
+        setup_venv "$python_cmd"
+        echo ""
+    fi
+
+    # If no arguments, show help and check PATH
+    if [[ $# -eq 0 ]]; then
+        check_path
+        exec "$VENV_DIR/bin/python" "$PYTHON_SCRIPT" --help
+    fi
+
+    # Run the actual script
+    exec "$VENV_DIR/bin/python" "$PYTHON_SCRIPT" "$@"
+}
+
+main "$@"

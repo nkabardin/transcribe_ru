@@ -1,0 +1,33 @@
+[project]
+name = "transcribe-ru"
+version = "1.0.0"
+description = "CLI tool for transcribing Russian audio to text using Whisper"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.0.0",
+    "torchaudio>=2.0.0",
+    "transformers>=4.36.0",
+    "tqdm>=4.65.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "ruff>=0.1.0",
+]
+
+[project.scripts]
+transcribe = "src.transcribe:main"
+transcribe-batch = "src.batch:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
